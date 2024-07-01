@@ -1,6 +1,6 @@
 # Tidy XML for digital editions
 
-This script is used to transform the formatting of XML documents into tidier form. It’s first and foremost tailored for documents exported from [Transkribus](https://www.transkribus.org/), but can also be used for documents converted from word processor documents with [TEIGarage Conversion](https://teigarage.tei-c.org/).
+This script is used to transform the formatting of [TEI](https://tei-c.org/) XML documents into tidier form. It’s first and foremost tailored for documents exported from [Transkribus](https://www.transkribus.org/), but can also be used for documents converted from word processor documents with [TEIGarage Conversion](https://teigarage.tei-c.org/).
 
 The script can also add expansions to unexpanded abbreviations in the documents from a separate JSON file. This can be done either to abbreviations encoded as `<choice><abbr>Abbr</abbr><expan/></choice>` or abbreviations that have not been encoded at all (option `CHECK_UNTAGGED_ABBREVIATIONS`, see below).
 
@@ -8,6 +8,10 @@ Created by Sebastian Köhler in April and June 2024 on the basis of a script by 
 
 
 ## Installation in order to run the script from the command line
+
+### Prerequisite
+
+Ensure you have [Python](https://www.python.org/) installed. The script has been developed with Python 3.12.
 
 ### 1. Clone the repository
 
@@ -52,6 +56,11 @@ pip install -r requirements.txt
 - Add the xml-files which are to be tidied in a folder named `bad_xml` in the same folder as the script file `tidy_xml.py`. The xml-files should be encoded according to the [TEI standard](https://tei-c.org/). If exporting xml-files from Transkribus, the tag lines TEI export option must be set to `<lb/>` for all texts except poetry. For poetry, set the tag lines export option to `<l>...</l>`.
 - Optionally add `abbr_dictionary.json` to a folder named `dictionaries` in the same folder as the script file. The JSON-file should contain abbreviations and their expansions as key–value pairs in JSON format.
 - Rename `.env_example` -> `.env` and modify the parameters if necessary (see parameters below).
+
+Run:
+```bash
+python tidy_xml.py
+```
 
 `.env` file parameters:
 

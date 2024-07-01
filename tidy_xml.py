@@ -96,11 +96,14 @@ def main():
 		print()
 		input("Press Enter to start processing xml-files ")
 
-	print(f"\nProcessing {len(file_list)} XML-files:")
+	file_list_len = len(file_list)
+	print(f"\nProcessing {file_list_len} XML-files:")
 
 	n: int = 0
 	for file in file_list:
 		n += 1
+		print(f"{n}/{file_list_len}: ", flush=True, end="")
+
 		old_soup: BeautifulSoup = read_xml(file)
 		new_soup: BeautifulSoup = transform_xml(old_soup, abbr_dictionary)
 
@@ -109,7 +112,7 @@ def main():
 
 		tidy_xml_string: str = tidy_up_xml(str(new_soup), abbr_dictionary, n)
 		write_to_file(tidy_xml_string, file)
-		print(f"{n}. Created {OUTPUT_FOLDER}/{file}")
+		print(f"Created {OUTPUT_FOLDER}/{file}")
 
 	print(f"\nSuccessfully tidied {len(file_list)} XML-files.\n")
 
@@ -324,6 +327,17 @@ def transform_xml(old_soup: BeautifulSoup, abbr_dictionary) -> BeautifulSoup:
 			del ab["facs"]
 		if "type" in ab.attrs:
 			del ab["type"]
+	# get all <graphic>
+	graphics = new_soup.find_all("graphic")
+	for graphic in graphics:
+		if "height" in graphic.attrs:
+			del graphic["height"]
+		if "width" in graphic.attrs:
+			del graphic["width"]
+		if "n" in graphic.attrs:
+			del graphic["n"]
+		if "rend" in graphic.attrs:
+			del graphic["rend"]
 	# get all <supplied>
 	supplieds = new_soup.find_all("supplied")
 	for supplied in supplieds:
@@ -746,12 +760,12 @@ def print_exe_header():
 #
 # Version: {SCRIPT_VERSION}
 #
-# This script is used to transform the formatting of XML documents into
+# This script is used to transform the formatting of TEI XML documents into
 # tidier form. It’s first and foremost tailored for documents exported from 
 # Transkribus, but can also be used for documents converted from word 
 # processor documents with TEIGarage Conversion.
 #
-# See README.md on https://github.com/slsfi/digital-edition-tidy-xml-py
+# See the README on https://github.com/slsfi/digital-edition-tidy-xml-py
 # for instructions and options.
 #
 #############################################################################
