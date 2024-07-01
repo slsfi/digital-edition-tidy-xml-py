@@ -9,9 +9,14 @@ from dotenv import load_dotenv
 
 SCRIPT_VERSION = "1.0.0"
 
-# Set EXE_MODE to True only when building an executable of 
-# the script using pyinstaller (only affects console output)
+# Flag for additional console output while running the script,
+# intended to be set to True when building an executable using
+# pyinstaller.
 EXE_MODE = False
+
+# Flag for running the script in debug mode, which outputs the
+# processed xml after parsing and during tidying.
+DEBUG = True
 
 SOURCE_FOLDER = "bad_xml"
 OUTPUT_FOLDER = "good_xml"
@@ -99,7 +104,8 @@ def main():
 		old_soup: BeautifulSoup = read_xml(file)
 		new_soup: BeautifulSoup = transform_xml(old_soup, abbr_dictionary)
 
-		write_to_file(str(new_soup), f"parsing_temp_{n}.xml")
+		if DEBUG:
+			write_to_file(str(new_soup), f"parsing_temp_{n}.xml")
 
 		tidy_xml_string: str = tidy_up_xml(str(new_soup), abbr_dictionary, n)
 		write_to_file(tidy_xml_string, file)
@@ -158,23 +164,24 @@ def transform_xml(old_soup: BeautifulSoup, abbr_dictionary) -> BeautifulSoup:
 	# get all <p>, remove @facs and @style
 	ps = new_soup.find_all("p")
 	for p in ps:
-		if "facs" in p.attrs:
-			del p["facs"]
-		if "style" in p.attrs:
-			del p["style"]
-		if "rend" in p.attrs:
-			value = p["rend"]
-			if value == "Quote":
-				p["rend"] = "parIndent"
-			if value == "footnote text":
-				p.unwrap()
-			if value == "color(#222222)":
-				del p["rend"]
-	# it's possible to export prose from Transkribus OCR
-	# encoded as p + lg + l
-	# since it's not verse, but prose: delete l and lg
-	# and set a flag, so we can combine the lines correctly
-	# later on and then get rid of line breaks and hyphens
+		# Check if <p> contains only an <lg> element
+		if p.lg:
+			# Replace the <p> element with its <lg> child
+			p.replace_with(p.lg)
+		else:
+			if "facs" in p.attrs:
+				del p["facs"]
+			if "style" in p.attrs:
+				del p["style"]
+			if "rend" in p.attrs:
+				value = p["rend"]
+				if value == "Quote":
+					p["rend"] = "parIndent"
+				if value == "footnote text":
+					p.unwrap()
+				if value == "color(#222222)":
+					del p["rend"]
+	# get all <l> and remove any @rend="indent" from them
 	ls = new_soup.find_all("l")
 	for l in ls:
 		if "rend" in l.attrs:
@@ -252,7 +259,7 @@ def transform_xml(old_soup: BeautifulSoup, abbr_dictionary) -> BeautifulSoup:
 				del hi["rend"]
 				hi.name = "tag"
 			if "italic" in value:
-				del hi["rend"]
+				hi["rend"] = "italics"
 			if value == "Harvennettu":
 				hi["rend"] = "expanded"
 			if value == "Vieraskielinen":
@@ -277,7 +284,7 @@ def transform_xml(old_soup: BeautifulSoup, abbr_dictionary) -> BeautifulSoup:
 				seg["rend"] = "bold italics"
 				seg.name = "hi"
 			if value == "italic":
-				del seg["rend"]
+				seg["rend"] = "italics"
 				seg.name = "hi"
 			if value == "color(222222)":
 				seg.unwrap()
@@ -338,26 +345,39 @@ def transform_xml(old_soup: BeautifulSoup, abbr_dictionary) -> BeautifulSoup:
 	return new_soup
 
 
-# get rid of tabs, extra spaces and newlines
+# Get rid of tabs, extra spaces and newlines
 # add newlines as preferred
 # fix common problems caused by OCR programs, editors or
 # otherwise present in source files
 def tidy_up_xml(xml_string: str, abbr_dictionary, file_n: int):
-	# remove all whitespace characters at the beginning of lines,
+	# Remove all whitespace characters at the beginning of lines,
  	# including blank lines
 	pattern = re.compile(r"^\s+", re.MULTILINE)
 	xml_string = pattern.sub("", xml_string)
 
-	# remove all carriage returns
+	# Remove all carriage returns
 	xml_string = xml_string.replace("\r", "")
 
-	# remove soft hyphen (U+00AD; &shy;) (invisible in VS Code)
+	# Remove soft hyphen (U+00AD; &shy;) (invisible in VS Code)
 	xml_string = xml_string.replace("­", "")
 
-	# replace no-break spaces with ordinary spaces
+	# Replace no-break spaces with ordinary spaces
 	xml_string = xml_string.replace(" ", " ")
 
-	# replace hyphens with dashes when surrounded by combinations
+	# Remove whitespace characters at the start or end of paragraph tags
+	pattern = re.compile(r"<p>\s*")
+	xml_string = pattern.sub("<p>", xml_string)
+	pattern = re.compile(r"\s*</p>")
+	xml_string = pattern.sub("</p>", xml_string)
+
+	# Ensure all <lb/> start on new lines while processing
+	xml_string = xml_string.replace("<p><lb/>", "<p>\n<lb/>")
+
+	# Replace not signs to hyphens when followed by newlines
+	xml_string = xml_string.replace("¬\n", "-\n")
+	xml_string = xml_string.replace("¬<lb/>\n", "-<lb/>\n")
+
+	# Replace hyphens with dashes when surrounded by combinations
 	# of space, newline and <lb/>
 	xml_string = xml_string.replace(" -\n", " –\n")
 	xml_string = xml_string.replace(" -<lb/>", " –<lb/>")
@@ -365,54 +385,70 @@ def tidy_up_xml(xml_string: str, abbr_dictionary, file_n: int):
 	xml_string = xml_string.replace("<lb/>- ", "<lb/>– ")
 	xml_string = xml_string.replace(" - ", " – ")
 
-	# remove <lb> tags before </p> and before the first <p>
-	xml_string = xml_string.replace("<lb/></p>", "</p>")
-	xml_string = xml_string.replace("<lb/>\n</p>", "</p>")
-	xml_string = xml_string.replace("<p><lb/>", "<p>", 1)
+	# When there are several deleted lines of text,
+	# exports from Transkribus contain one <del> per line,
+	# but it's ok to have a <del> spanning several lines
+	# so let's replace those chopped up <del>:s
+	# the same goes for <add>
+	xml_string = xml_string.replace("</del><lb/>\n<del>", "<lb/>\n")
+	xml_string = xml_string.replace("</del>\n<lb/><del>", "\n<lb/>")
+	xml_string = xml_string.replace("</add><lb/>\n<add>", "<lb/>\n")
+	xml_string = xml_string.replace("</add>\n<lb/><add>", "\n<lb/>")
 
-	# let <hi> continue instead of being broken up into several <hi>:s
-	xml_string = xml_string.replace("</hi>\n<lb/><hi>", "\n<lb/>")
+	# Remove lines that contain just <lb/> if followed by a line starting with <lb/>
+	xml_string = xml_string.replace("\n<lb/>\n<lb/>", "\n<lb/>")
 
-	# replace not signs to hyphens when followed by newlines
-	xml_string = xml_string.replace("¬\n", "-\n")
-	xml_string = xml_string.replace("¬<lb/>\n", "-<lb/>\n")
+	# Let <hi> continue instead of being broken up into several <hi>:s.
+	# We are assuming that the same @rend value continues on the second line.
+	xml_string = re.sub(r"</hi>(\n<lb[^/]*?/>)<hi[^>]*?>", r"\1", xml_string)
 
 	if PRESERVE_LB_TAGS:
-		# move any <lb/> tags at the end of lines to the start
+		# Move any <lb/> tags at the end of lines to the start
 		# and add attribute indicating hyphens if necessary
 		xml_string = xml_string.replace("-<lb/>\n", '-\n<lb break="word"/>')
+		xml_string = xml_string.replace("-\n<lb/>", '-\n<lb break="word"/>')
 		xml_string = xml_string.replace("<lb/>\n", '\n<lb break="line"/>')
+		xml_string = xml_string.replace("\n<lb/>", '\n<lb break="line"/>')
 	else:
-		# remove hyphens followed by closing and opening <p> on new lines
-		xml_string = xml_string.replace("-\n</p>\n<p>\n", "")
-		# remove hyphens followed by newlines and <lb/>
+		# Remove hyphens followed by closing and opening <p> on new lines
+		xml_string = xml_string.replace("-\n</p>\n<p>", "")
+		# Remove hyphens followed by newlines and <lb/>
 		xml_string = xml_string.replace("-\n<lb/>", "")
 		xml_string = xml_string.replace("-\n", "")
-		# replace newline followed by <lb/> with space
+		# Replace newline followed by <lb/> with space
 		xml_string = xml_string.replace("\n<lb/>", " ")
-		# replace any remaining newlines with spaces within <p>
+		# Replace any remaining newlines with spaces within <p>
 		xml_string = re.sub(r"<p>.*?</p>", newlines_to_spaces, xml_string, flags=re.DOTALL)
-		# remove multiple consecutive whitespace characters within <p>
+		# Remove multiple consecutive whitespace characters within <p>
 		xml_string = re.sub(r"<p>.*?</p>", remove_extra_spaces, xml_string, flags=re.DOTALL)
 
-	# remove whitespace characters at the start or end of paragraph tags
-	pattern = re.compile(r"<p>\s*")
-	xml_string = pattern.sub("<p>", xml_string)
-	pattern = re.compile(r"\s*</p>")
-	xml_string = pattern.sub("</p>", xml_string)
+	# Remove all newline characters
+	xml_string = xml_string.replace("\n", "")
 
-	# remove closing and opening paragraph tags if there is an <lb>
+	# Replace <pb type="orig"/></p> with </p><pb type="orig"/>
+	xml_string = xml_string.replace('<pb type="orig"/></p>', '</p><pb type="orig"/>')
+
+	# Remove <lb> tags before </p> and before the first <p>
+	xml_string = xml_string.replace("<lb/></p>", "</p>")
+	xml_string = xml_string.replace('<lb break="line"/></p>', "</p>")
+	xml_string = xml_string.replace('<p><lb break="line"/>', "<p>", 1)
+
+	# Insert newline characters before block-level tags
+	xml_string = insert_newlines_before_block_tags(xml_string)
+
+	# Put <pb/> tags on separate lines
+	pattern = r"(<pb [^>]*?/>)"
+	xml_string = re.sub(pattern, r"\n\1\n", xml_string)
+
+	# Insert newlines before <lb/>
+	pattern = r"(<lb[^/]*?/>)"
+	xml_string = re.sub(pattern, r"\n\1", xml_string)
+
+	# Remove closing and opening paragraph tags if there is an <lb>
  	# tag indicating hyphenated word in the line break
-	xml_string = xml_string.replace('\n<lb break="word"/></p>\n<p>', '\n<lb break="word"/>')
+	xml_string = xml_string.replace('\n<lb break="word"/>\n</p>\n<p>', '\n<lb break="word"/>')
 
-	# remove newlines directly before closing tags, but only if
-	# not another tag before the closing tag
-	pattern = re.compile(r"(?<!>)\n</([a-zA-Z]+?)>")
-	xml_string = pattern.sub(r"</\1>", xml_string)
-
-	write_to_file(xml_string, f"tidy_temp_{file_n}.xml")
-
-	# add space before ... if preceeded by a word character
+	# Add space before ... if preceeded by a word character
 	# remove space between full stops and standardize two full stops to three
 	pattern = re.compile(r"(\w) *\. *\.( *\.)?")
 	xml_string = pattern.sub(r"\1 ...", xml_string)
@@ -438,11 +474,11 @@ def tidy_up_xml(xml_string: str, abbr_dictionary, file_n: int):
 			EXCLUDE_NUMBERS_NORM_MAX
 		)
 
-	# the asterisk stands for a footnote
+	# The asterisk stands for a footnote
 	pattern = re.compile(r" *\*\) *")
 	xml_string = pattern.sub("<note xml:id=\"ftn\" n=\"*)\" place=\"foot\"></note>", xml_string)
 
-	# replace certain characters
+	# Replace certain characters
 	pattern = re.compile(r"&quot;")
 	xml_string = pattern.sub("”", xml_string)
 	pattern = re.compile(r"&apos;")
@@ -450,26 +486,15 @@ def tidy_up_xml(xml_string: str, abbr_dictionary, file_n: int):
 	pattern = re.compile(r"º")
 	xml_string = pattern.sub("<hi rend=\"raised\">o</hi>", xml_string)
 
-	# there should be a non-breaking space before %
+	# There should be a non-breaking space before %
 	pattern = re.compile(r"([^  ])%")
 	xml_string = pattern.sub(r"\1&#x00A0;%", xml_string)
 	pattern = re.compile(r" %")
 	xml_string = pattern.sub(r"&#x00A0;%", xml_string)
 
-	# content of element note shouldn't start with space
+	# Content of element note shouldn't start with space
 	pattern = re.compile(r"(<note .+?>) ")
 	xml_string = pattern.sub(r"\1", xml_string)
-
-	# replace hyphens followed by <lb/> with spaces within <p>
-	xml_string = re.sub(r"<p>.*?</p>", remove_hyphenated_newlines, xml_string, flags=re.DOTALL)
-
-	# when there are several deleted lines of text,
-	# exports from Transkribus contain one <del> per line,
-	# but it's ok to have a <del> spanning several lines
-	# so let's replace those chopped up <del>:s
-	# the same goes for <add>
-	xml_string = xml_string.replace("</del><lb/>\n<del>", "<lb/>\n")
-	xml_string = xml_string.replace("</add><lb/>\n<add>", "<lb/>\n")
 
 	# Replace any " characters in text nodes with typographic
 	# right double quotation mark ” as " may only occur inside tags
@@ -478,16 +503,11 @@ def tidy_up_xml(xml_string: str, abbr_dictionary, file_n: int):
 	xml_string = xml_string.replace('"', '”')
 	xml_string = re.sub(r'<[^>]+>', doublequotes_to_straightquotes, xml_string)
 
-	# Remove empty <p/>
-	xml_string = xml_string.replace("<p>\n</p>", "<p/>")
-	xml_string = xml_string.replace("<p/>\n", "")
-	xml_string = xml_string.replace("<p/>", "")
-
 	# Remove multiple consecutive space characters
 	pattern = re.compile(r" +")
 	xml_string = pattern.sub(" ", xml_string)
 
-	# finally standardize certain other characters
+	# Standardize certain other characters
 	xml_string = xml_string.replace("„", "”")
 	xml_string = xml_string.replace("‟", "”")
 	xml_string = xml_string.replace("“", "”")
@@ -498,9 +518,65 @@ def tidy_up_xml(xml_string: str, abbr_dictionary, file_n: int):
 	xml_string = xml_string.replace("’’", "”")
 	xml_string = xml_string.replace("´", "’")
 
+	# Indent lines starting with <lb/> within <p>
+	xml_string = re.sub(r"<p>.*?</p>", indent_lb_tags, xml_string, flags=re.DOTALL)
+
+	# Indent lines starting with <l> within <lg>
+	xml_string = re.sub(r"<lg>.*?</lg>", indent_l_tags, xml_string, flags=re.DOTALL)
+
+	# Output for debugging
+	if DEBUG:
+		write_to_file(xml_string, f"tidy_temp_{file_n}.xml")
+
+	if PRESERVE_LB_TAGS:
+		# Change <lb/> break type to word if previous line ends with hyphen
+		# marked by <pc> tag.
+		xml_string = xml_string.replace('<pc>-</pc>\n\t<lb break="line"/>', '<pc>-</pc>\n\t<lb break="word"/>')
+	else:
+		# Remove whitespace characters at the start or end of paragraph tags
+		pattern = re.compile(r"<p>\s*")
+		xml_string = pattern.sub("<p>", xml_string)
+		pattern = re.compile(r"\s*</p>")
+		xml_string = pattern.sub("</p>", xml_string)
+		# Remove space character after closing <pc> tag
+		xml_string = xml_string.replace("</pc> ", "</pc>")
+
+	# Remove empty <p/>
+	xml_string = xml_string.replace("<p>\n</p>", "<p/>")
+	xml_string = xml_string.replace("<p/>\n", "")
+	xml_string = xml_string.replace("<p/>", "")
+	xml_string = xml_string.replace("<p></p>", "")
+
+	# Replace multiple consecutive newlines with a single newline
+	xml_string = re.sub(r"\n+", "\n", xml_string)
+
 	if CHECK_UNTAGGED_ABBREVIATIONS is True:
 		xml_string = replace_untagged_abbreviations(xml_string, abbr_dictionary)
+
 	return xml_string
+
+
+def insert_newlines_before_block_tags(text: str) -> str:
+	before_tags = [
+		"<root>", "</root>", "<div>", "</div>", "<p>", "</p>", "<lg>", "</lg>",
+		"<head>", "<l>"
+	]
+
+	for tag in before_tags:
+		text = text.replace(tag, "\n" + tag)
+
+	tags_with_attr = [
+		"div", "p", "lg", "head", "l"
+	]
+
+	# Loop through each tag in the list
+	for name in tags_with_attr:
+		# Create the regex pattern dynamically
+		pattern = fr"(<{name} [^>]+?>)"
+		# Perform the replacement
+		text = re.sub(pattern, r"\n\1", text)
+
+	return text
 
 
 # Function to remove newlines within a match
@@ -517,6 +593,14 @@ def remove_extra_spaces(match):
 
 def remove_hyphenated_newlines(match):
 	return match.group(0).replace("-<lb/>", "")
+
+
+def indent_lb_tags(match):
+	return re.sub(r"\n(<lb [^>]*?/>)", r"\n\t\1", match.group(0))
+
+
+def indent_l_tags(match):
+	return match.group(0).replace("\n<l>", "\n\t<l>")
 
 
 def doublequotes_to_straightquotes(match):
@@ -539,16 +623,18 @@ def replace_untagged_abbreviations(xml_string, abbr_dictionary):
 		# prevent abbrs containing a dot from being treated as regex
 		# otherwise e.g. abbr "Fr." matches "Fri" in the text
 		abbreviation_in_text = re.escape(abbreviation)
-		# by adding some sontext to the abbr we can specify 
+		# by adding some context to the abbr we can specify 
 		# what a word should look like and make sure that parts
 		# of words or already tagged words don't get tagged 
 		pattern = re.compile(r"(\s|^|»|”|\()" + abbreviation_in_text + r"(\s|\.|,|\?|!|»|”|:|;|\)|<lb/>|</p>)", re.MULTILINE)
 		result = pattern.search(xml_string)
+
 		if result is not None:
 			# get the expan for this abbr and substitute this
 			# part of the text
 			expansion = abbr_dictionary[abbreviation]
 			xml_string = pattern.sub(r"\1" + "<choice><abbr>" + abbreviation + "</abbr><expan>" + expansion + "</expan></choice>" r"\2", xml_string)
+
 	return xml_string
 
 
@@ -605,7 +691,12 @@ def normalize_and_format_numbers(text, new_separator, reg_encode):
 def write_to_file(tidy_xml_string, filename):
 	if not os.path.exists(OUTPUT_FOLDER):
 		os.makedirs(OUTPUT_FOLDER)
-	output_file = open(os.path.join(OUTPUT_FOLDER, filename), "w", encoding="utf-8")
+
+	if DEBUG:
+		newline_char = ""
+	else:
+		newline_char = None
+	output_file = open(os.path.join(OUTPUT_FOLDER, filename), "w", encoding="utf-8", newline=newline_char)
 	output_file.write(tidy_xml_string)
 	output_file.close()
 
@@ -625,7 +716,7 @@ def print_exe_header():
 # for instructions and options.
 #
 #############################################################################
-	"""
+"""
 	print(header)
 
 
