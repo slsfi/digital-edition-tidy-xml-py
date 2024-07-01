@@ -153,6 +153,10 @@ def transform_xml(old_soup: BeautifulSoup, abbr_dictionary) -> BeautifulSoup:
 	new_soup.root.append(xml_body)
 	new_soup.body.unwrap()
 
+	# get all <anchor/> and remove them
+	anchors = new_soup.find_all("anchor")
+	for anchor in anchors:
+		anchor.unwrap()
 	# get all <pb>, remove @facs and @xml:id, add @type="orig"
 	pbs = new_soup.find_all("pb")
 	for pb in pbs:
@@ -177,10 +181,15 @@ def transform_xml(old_soup: BeautifulSoup, abbr_dictionary) -> BeautifulSoup:
 				value = p["rend"]
 				if value == "Quote":
 					p["rend"] = "parIndent"
-				if value == "footnote text":
+				elif value == "footnote text":
 					p.unwrap()
-				if value == "color(#222222)":
+				else:
 					del p["rend"]
+	# get all <note>
+	notes = new_soup.find_all("note")
+	for note in notes:
+		if len(note.contents) == 1 and note.contents[0].name == "p":
+			note.p.unwrap()
 	# get all <l> and remove any @rend="indent" from them
 	ls = new_soup.find_all("l")
 	for l in ls:
@@ -231,11 +240,24 @@ def transform_xml(old_soup: BeautifulSoup, abbr_dictionary) -> BeautifulSoup:
 	for list in lists:
 		if "type" in list.attrs:
 			del list["type"]
+		if "rend" in list.attrs:
+			value = list["rend"]
+			if value == "numbered":
+				list["rend"] = "decimal"
 	# get all <hi>
 	his = new_soup.find_all("hi")
 	for hi in his:
 		if "style" in hi.attrs:
 			del hi["style"]
+		if "xml:space" in hi.attrs:
+			del hi["xml:space"]
+		# Check if the <hi> has exactly one child and it's a <seg> with rend="bold"
+		if len(hi.contents) == 1 and hi.contents[0].name == "seg":
+			rend_value = hi.contents[0].get("rend")
+			if rend_value and ("bold" in rend_value or "italic" in rend_value):
+				# Replace the <hi> element with its <seg> child
+				hi.replace_with(hi.contents[0])
+				continue
 		if "rend" in hi.attrs:
 			del hi["style"]
 			value = hi["rend"]
@@ -249,45 +271,46 @@ def transform_xml(old_soup: BeautifulSoup, abbr_dictionary) -> BeautifulSoup:
 					hi["rend"] = value
 			if "italic" in value and "bold" in value:
 				hi["rend"] = "bold italics"
-			if "subscript" in value:
+			elif "subscript" in value:
 				hi["rend"] = "sub"
-			if "underlined" in value:
+			elif "underlined" in value:
 				hi["rend"] = "underline"
-			if "super" in value:
+			elif "super" in value:
 				hi["rend"] = "raised"
-			if "strikethrough" in value:
+			elif "strikethrough" in value:
 				del hi["rend"]
 				hi.name = "tag"
-			if "italic" in value:
+			elif "italic" in value:
 				hi["rend"] = "italics"
-			if value == "Harvennettu":
-				hi["rend"] = "expanded"
-			if value == "Vieraskielinen":
+			elif value == "Emphasis":
 				del hi["rend"]
-				hi.name = "foreign"
-			if value == "Emphasis":
-				del hi["rend"]
-			if value == "Lisätty_marginaaliin":
-				del hi["rend"]
-				hi["type"] = "marginalia"
-				hi.name = "add"
-		if "xml:space" in hi.attrs:
-			del hi["xml:space"]
+			elif "Body" in value or "Other" in value or "Footnote" in value or "Table" in value or "Heading" in value:
+				hi.unwrap()
+				continue
 	# get all <seg>
 	segs = new_soup.find_all("seg")
 	for seg in segs:
 		if "xml:space" in seg.attrs:
 			del seg["xml:space"]
+		if "style" in seg.attrs:
+			del seg["style"]
 		if "rend" in seg.attrs:
 			value = seg["rend"]
 			if "italic" in value and "bold" in value:
 				seg["rend"] = "bold italics"
 				seg.name = "hi"
-			if value == "italic":
+			elif "italic" in value:
 				seg["rend"] = "italics"
 				seg.name = "hi"
-			if value == "color(222222)":
+			elif "bold" in value:
+				seg["rend"] = "bold"
+				seg.name = "hi"
+			else:
 				seg.unwrap()
+				continue
+		if not seg.attrs:
+			seg.unwrap()
+			continue
 	# get all <ref>
 	refs = new_soup.find_all("ref")
 	for ref in refs:
@@ -401,6 +424,18 @@ def tidy_up_xml(xml_string: str, abbr_dictionary, file_n: int):
 	# Let <hi> continue instead of being broken up into several <hi>:s.
 	# We are assuming that the same @rend value continues on the second line.
 	xml_string = re.sub(r"</hi>(\n<lb[^/]*?/>)<hi[^>]*?>", r"\1", xml_string)
+
+	# Combine consecutive <hi rend="bold"> and <hi rend="italics"> tags
+	attr_vals = ["bold", "italics"]
+	for val in attr_vals:
+		pattern = re.compile(fr'<hi rend="{val}">((?:(?!</hi>).)*)</hi><hi rend="{val}">((?:(?!</hi>).)*)</hi>')
+		# While loop to repeatedly apply the replacement
+		while pattern.search(xml_string):
+			# Perform the substitution
+			xml_string = pattern.sub(fr'<hi rend="{val}">\1\2</hi>', xml_string)
+	
+	# Move space character at the end of <hi> content outside closing tag
+	xml_string = xml_string.replace(" </hi>", "</hi> ")
 
 	if PRESERVE_LB_TAGS:
 		# Move any <lb/> tags at the end of lines to the start
@@ -524,6 +559,9 @@ def tidy_up_xml(xml_string: str, abbr_dictionary, file_n: int):
 	# Indent lines starting with <l> within <lg>
 	xml_string = re.sub(r"<lg>.*?</lg>", indent_l_tags, xml_string, flags=re.DOTALL)
 
+	# Indent <item> elements
+	xml_string = xml_string.replace("<item>", "\t<item>")
+
 	# Output for debugging
 	if DEBUG:
 		write_to_file(xml_string, f"tidy_temp_{file_n}.xml")
@@ -559,14 +597,15 @@ def tidy_up_xml(xml_string: str, abbr_dictionary, file_n: int):
 def insert_newlines_before_block_tags(text: str) -> str:
 	before_tags = [
 		"<root>", "</root>", "<div>", "</div>", "<p>", "</p>", "<lg>", "</lg>",
-		"<head>", "<l>"
+		"<list>", "</list>",
+		"<head>", "<item>", "<l>"
 	]
 
 	for tag in before_tags:
 		text = text.replace(tag, "\n" + tag)
 
 	tags_with_attr = [
-		"div", "p", "lg", "head", "l"
+		"div", "p", "lg", "head", "l", "list"
 	]
 
 	# Loop through each tag in the list
