@@ -12,11 +12,11 @@ SCRIPT_VERSION = "1.0.0"
 # Flag for additional console output while running the script,
 # intended to be set to True when building an executable using
 # pyinstaller.
-EXE_MODE = False
+EXE_MODE = True
 
 # Flag for running the script in debug mode, which outputs the
 # processed xml after parsing and during tidying.
-DEBUG = True
+DEBUG = False
 
 SOURCE_FOLDER = "bad_xml"
 OUTPUT_FOLDER = "good_xml"
@@ -62,10 +62,10 @@ if os.getenv("CHECK_UNTAGGED_ABBREVIATIONS") == "True":
 else:
 	CHECK_UNTAGGED_ABBREVIATIONS = False
 
-if os.getenv("PRESERVE_LB_TAGS") == "False":
-	PRESERVE_LB_TAGS = False
-else:
+if os.getenv("PRESERVE_LB_TAGS") == "True":
 	PRESERVE_LB_TAGS = True
+else:
+	PRESERVE_LB_TAGS = False
 
 
 def main():
@@ -437,6 +437,10 @@ def tidy_up_xml(xml_string: str, abbr_dictionary, file_n: int):
 	# Move space character at the end of <hi> content outside closing tag
 	xml_string = xml_string.replace(" </hi>", "</hi> ")
 
+	# Output for debugging
+	if DEBUG:
+		write_to_file(xml_string, f"tidy_temp_{file_n}.xml")
+
 	if PRESERVE_LB_TAGS:
 		# Move any <lb/> tags at the end of lines to the start
 		# and add attribute indicating hyphens if necessary
@@ -561,10 +565,6 @@ def tidy_up_xml(xml_string: str, abbr_dictionary, file_n: int):
 
 	# Indent <item> elements
 	xml_string = xml_string.replace("<item>", "\t<item>")
-
-	# Output for debugging
-	if DEBUG:
-		write_to_file(xml_string, f"tidy_temp_{file_n}.xml")
 
 	if PRESERVE_LB_TAGS:
 		# Change <lb/> break type to word if previous line ends with hyphen
