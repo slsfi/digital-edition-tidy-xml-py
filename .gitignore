@@ -124,6 +124,7 @@ celerybeat.pid
 .venv
 env/
 venv/
+venv*/
 ENV/
 env.bak/
 venv.bak/
@@ -159,7 +160,13 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Custom files/folders
-bad_xml/
-good_xml/
-dictionaries/
+# Custom files/folders (track .gitkeep in these)
+bad_xml/**
+good_xml/**
+dictionaries/**
+!bad_xml/**/
+!good_xml/**/
+!dictionaries/**/
+!bad_xml/.gitkeep
+!good_xml/.gitkeep
+!dictionaries/.gitkeep
