@@ -1,4 +1,4 @@
 beautifulsoup4~=4.12.3
 lxml~=5.2.2
-pyinstaller~=6.8.0
+pyinstaller~=6.10.0
 python-dotenv~=1.0.1
