@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 
-SCRIPT_VERSION = "1.0.0"
+SCRIPT_VERSION = "1.1.0"
 
 # Flag for additional console output while running the script,
 # intended to be set to True when building an executable using
@@ -131,7 +131,7 @@ def get_source_file_paths():
 
 # read an xml file and return its content as a soup object
 def read_xml(filename) -> BeautifulSoup:
-	with open (SOURCE_FOLDER + "/" + filename, "r", encoding="utf-8") as source_file:
+	with open (SOURCE_FOLDER + "/" + filename, "r", encoding="utf-8-sig") as source_file:
 		file_content = source_file.read()
 		old_soup = BeautifulSoup(file_content, "xml")
 	return old_soup
@@ -140,7 +140,7 @@ def read_xml(filename) -> BeautifulSoup:
 # get dictionary content from file
 def read_dict_from_file(filename):
 	try:
-		with open(filename, encoding="utf-8") as source_file:
+		with open(filename, encoding="utf-8-sig") as source_file:
 			json_content = json.load(source_file)
 			return json_content
 	except FileNotFoundError as error:
@@ -151,9 +151,21 @@ def read_dict_from_file(filename):
 
 def transform_xml(old_soup: BeautifulSoup, abbr_dictionary) -> BeautifulSoup:
 	"""Transforms certain elements, attributes and values in old_soup, which is a BeautifulSoup object, and returns the transformed BeautifulSoup object."""
-	xml_body = old_soup.find("body")
+	# Create a new soup with <root>
 	new_soup: BeautifulSoup = BeautifulSoup("<root></root>", "xml")
-	new_soup.root.append(xml_body)
+
+	# Find the <body> or root element
+	xml_body = old_soup.find("body")
+	if xml_body is None:
+		# No <body> element in XML document, get root element instead
+		old_root = old_soup.find()
+		old_root.name = "body"
+		new_soup.root.append(old_root)
+	else:
+		# Append <body> if it already exists
+		new_soup.root.append(xml_body)
+	
+	# Unwrap <body> to move its contents directly into <root>
 	new_soup.body.unwrap()
 
 	# get all <anchor/> and remove them
@@ -183,7 +195,9 @@ def transform_xml(old_soup: BeautifulSoup, abbr_dictionary) -> BeautifulSoup:
 			if "rend" in p.attrs:
 				value = p["rend"]
 				if value == "Quote":
-					p["rend"] = "parIndent"
+					# Wrap the element in <quote type="block">
+					p.wrap(new_soup.new_tag("quote", attrs={"type": "block"}))
+					del p["rend"]
 				elif value == "footnote text":
 					p.unwrap()
 				else:
@@ -206,25 +220,6 @@ def transform_xml(old_soup: BeautifulSoup, abbr_dictionary) -> BeautifulSoup:
 			del lb["facs"]
 		if "n" in lb.attrs:
 			del lb["n"]
-	# get all <head> and fix their @type depending on level
-	heads = new_soup.find_all("head")
-	for head in heads:
-		i = 0
-		for parent in head.parents:
-			if parent.name == "div":
-				i += 1
-		if i <= 2:
-			head["type"] = "h1"
-		if i == 3:
-			head["type"] = "h2"
-		if i == 4:
-			head["type"] = "h3"
-		if i == 5:
-			head["type"] = "h4"
-		if i == 6:
-			head["type"] = "h5"
-		if i == 7:
-			head["type"] = "h6"
 	# get all <table>
 	tables = new_soup.find_all("table")
 	for table in tables:
@@ -274,12 +269,10 @@ def transform_xml(old_soup: BeautifulSoup, abbr_dictionary) -> BeautifulSoup:
 					hi["rend"] = value
 			if "italic" in value and "bold" in value:
 				hi["rend"] = "bold italics"
-			elif "subscript" in value:
-				hi["rend"] = "sub"
 			elif "underlined" in value:
 				hi["rend"] = "underline"
 			elif "super" in value:
-				hi["rend"] = "raised"
+				hi["rend"] = "superscript"
 			elif "strikethrough" in value:
 				del hi["rend"]
 				hi.name = "tag"
@@ -307,6 +300,9 @@ def transform_xml(old_soup: BeautifulSoup, abbr_dictionary) -> BeautifulSoup:
 				seg.name = "hi"
 			elif "bold" in value:
 				seg["rend"] = "bold"
+				seg.name = "hi"
+			elif "smallcaps" in value:
+				seg["rend"] = "smallCaps"
 				seg.name = "hi"
 			else:
 				seg.unwrap()
@@ -379,6 +375,10 @@ def transform_xml(old_soup: BeautifulSoup, abbr_dictionary) -> BeautifulSoup:
 						# only add content to an empty <expan>
 						if child.name == "expan" and len(child.contents) < 1:
 							child.insert(0, expan_content)
+
+	# Combine sibling <quote type="block"> elements
+	new_soup = combine_quote_blocks(new_soup)
+
 	return new_soup
 
 
@@ -602,6 +602,9 @@ def tidy_up_xml(xml_string: str, abbr_dictionary, file_n: int):
 	# Replace multiple consecutive newlines with a single newline
 	xml_string = re.sub(r"\n+", "\n", xml_string)
 
+	# Ensure line break before <p>
+	xml_string = xml_string.replace("</p><p>", "</p>\n<p>")
+
 	if CHECK_UNTAGGED_ABBREVIATIONS is True:
 		xml_string = replace_untagged_abbreviations(xml_string, abbr_dictionary)
 
@@ -611,7 +614,7 @@ def tidy_up_xml(xml_string: str, abbr_dictionary, file_n: int):
 def insert_newlines_before_block_tags(text: str) -> str:
 	before_tags = [
 		"<root>", "</root>", "<div>", "</div>", "<p>", "</p>", "<lg>", "</lg>",
-		"<list>", "</list>",
+		"<list>", "</list>", "<quote>", "</quote>",
 		"<head>", "<item>", "<l>"
 	]
 
@@ -619,7 +622,7 @@ def insert_newlines_before_block_tags(text: str) -> str:
 		text = text.replace(tag, "\n" + tag)
 
 	tags_with_attr = [
-		"div", "p", "lg", "head", "l", "list"
+		"div", "p", "lg", "head", "l", "list", "quote"
 	]
 
 	# Loop through each tag in the list
@@ -738,6 +741,46 @@ def normalize_and_format_numbers(text, new_separator, reg_encode):
  	# (?:[,\s]\d{3})+ matches groups of three digits prefixed by either a comma or a space
 	# one or more times.
 	return re.sub(r'\b\d{1,3}(?:[,\s]\d{3})+\b', reformat_with_separator, text)
+
+
+def combine_quote_blocks(soup):
+	"""
+	Combines consecutive sibling <quote type="block"> elements in the XML tree.
+	
+	Parameters:
+			soup (BeautifulSoup): A BeautifulSoup object representing the parsed XML.
+			
+	Returns:
+			BeautifulSoup: The updated BeautifulSoup object with combined <quote type="block"> elements.
+	"""
+	# Find all <quote> elements
+	all_quotes = soup.find_all("quote")
+
+	# Initialize a variable to track the combined <quote type="block">
+	combined_quote = None
+
+	for quote in all_quotes:
+			# Check if the current quote is of type="block"
+			if quote.get("type") == "block":
+					if combined_quote is None:
+							# If no combined quote exists, start with this one
+							combined_quote = quote
+					else:
+							# Check if the current <quote> is a sibling of the combined <quote>
+							if combined_quote.find_next_sibling() == quote:
+									# Append the contents of this quote to the combined quote
+									for child in quote.find_all(recursive=False):
+											combined_quote.append(child)
+									# Remove the current quote
+									quote.decompose()
+							else:
+									# Reset the combined quote if they are not siblings
+									combined_quote = quote
+			else:
+					# Reset the combined quote if a non-matching <quote> is found
+					combined_quote = None
+
+	return soup
 
 
 # save the new xml file in another folder
