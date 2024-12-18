@@ -6,6 +6,10 @@ The script can also add expansions to unexpanded abbreviations in the documents 
 
 Created by Sebastian Köhler in April and June 2024 on the basis of a script by Anna Movall (<https://github.com/Movanna/transform_texts/blob/main/transform_xml.py>).
 
+## Changelog
+
+[Learn about the latest improvements][changelog].
+
 
 ## Installation in order to run the script from the command line
 
@@ -91,6 +95,5 @@ where `x.y.z` should be replaced with the actual semantic version number of the 
 Your bundled application should now be available in the `dist` folder.
 
 
-## Change log
 
-- 2024-07-01: v1.0.0
+[changelog]: CHANGELOG.md
